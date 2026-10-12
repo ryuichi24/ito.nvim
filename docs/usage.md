@@ -4,7 +4,7 @@
 
 ## Multiple SSH machines
 
-Run `:Ito` to open the dashboard:
+Run `:Ito` to open the centered floating dashboard:
 
 ```text
 devbox  [2 running]
@@ -21,6 +21,12 @@ staging  [1 running]
 - `d` forgets the selected host's saved definitions and stops its forwards.
 - `r` refreshes the overview. Status also updates when forwards change.
 - Unsaved edits are marked; switching hosts preserves them without applying them.
+- `q` or Esc closes the dashboard and returns to your previous window.
+
+Selecting or adding a host closes the float and opens its editable buffer in
+the previous window. `gd` brings the dashboard back without replacing that
+window's buffer. The float resizes with Neovim; opening it again focuses the
+existing dashboard rather than creating another window.
 
 Open a host directly with `:Ito my-server`, where `my-server` is an SSH config
 alias, hostname, or `user@host`.

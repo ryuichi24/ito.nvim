@@ -30,7 +30,7 @@ No setup call is required. See [configuration](docs/configuration.md) for option
 
 ## Quick start
 
-1. Run `:Ito` to open the dashboard.
+1. Run `:Ito` to open the floating dashboard.
 2. Press `a` and enter an SSH hostname, `user@host`, or SSH config alias.
 3. Edit port pairs in that host's buffer:
 
@@ -54,6 +54,7 @@ machine. You can also open a host directly with `:Ito user@host`.
 | Dashboard | `a` / Enter | Add / edit a host |
 | Dashboard | `s` / `r` | Stop selected host / refresh |
 | Dashboard | `d` | Forget selected host and stop its forwards |
+| Dashboard | `q` / Esc | Close the dashboard |
 | Host buffer | `:w` | Apply edited port pairs |
 | Host buffer | `gp` / `gd` | Port discovery / dashboard |
 | Host buffer | `gr` | Refresh status |

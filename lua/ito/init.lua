@@ -3,6 +3,8 @@ local config = { ssh = "ssh", ssh_options = {}, default_bind_address = "127.0.0.
 local sessions = {}
 local ns = vim.api.nvim_create_namespace("ito")
 local dashboard_buf
+local dashboard_win
+local dashboard_origin
 local dashboard_rows = {}
 local refresh_dashboard
 local create_session
@@ -13,6 +15,26 @@ local storage = require("ito.storage")
 
 local function focus(buf)
   vim.cmd("hide buffer " .. buf)
+end
+
+local function dashboard_geometry()
+  local available_height = math.max(1, vim.o.lines - vim.o.cmdheight - 3)
+  local width = math.max(1, math.min(96, math.floor((vim.o.columns - 2) * 0.85)))
+  local height = math.max(1, math.min(24, math.floor(available_height * 0.75)))
+  return { relative = "editor", width = width, height = height,
+    row = math.max(0, math.floor((available_height - height) / 2)),
+    col = math.max(0, math.floor((vim.o.columns - width) / 2) - 1) }
+end
+
+local function close_dashboard()
+  if dashboard_win and vim.api.nvim_win_is_valid(dashboard_win) then
+    local focused = vim.api.nvim_get_current_win() == dashboard_win
+    vim.api.nvim_win_close(dashboard_win, true)
+    if focused and dashboard_origin and vim.api.nvim_win_is_valid(dashboard_origin) then
+      vim.api.nvim_set_current_win(dashboard_origin)
+    end
+  end
+  dashboard_win = nil
 end
 
 local function notify(message, level)
@@ -219,7 +241,7 @@ end
 refresh_dashboard = function()
   if not dashboard_buf or not vim.api.nvim_buf_is_valid(dashboard_buf) then return end
   local lines = { "# Ito — SSH forwarding dashboard",
-    "# <Enter> edit host   a add host   s stop host   d forget host   r refresh", "" }
+    "# <Enter> edit   a add   s stop   d forget   r refresh   q close", "" }
   dashboard_rows = {}
   local hosts = vim.tbl_keys(sessions)
   table.sort(hosts)
@@ -279,10 +301,25 @@ function M.dashboard()
       if host then M.forget(host) end
     end, { buffer = dashboard_buf, desc = "Forget host and stop forwards" })
     vim.keymap.set("n", "r", refresh_dashboard, { buffer = dashboard_buf, desc = "Refresh dashboard" })
+    for _, key in ipairs({ "q", "<Esc>" }) do
+      vim.keymap.set("n", key, close_dashboard, { buffer = dashboard_buf, desc = "Close dashboard" })
+    end
     vim.api.nvim_create_autocmd("BufEnter", { buffer = dashboard_buf, callback = refresh_dashboard })
   end
   refresh_dashboard()
-  focus(dashboard_buf)
+  if dashboard_win and vim.api.nvim_win_is_valid(dashboard_win) then
+    vim.api.nvim_set_current_win(dashboard_win)
+    return
+  end
+  dashboard_origin = vim.api.nvim_get_current_win()
+  local options = dashboard_geometry()
+  options.style = "minimal"
+  options.border = "rounded"
+  options.title = " Ito — SSH forwards "
+  options.title_pos = "center"
+  dashboard_win = vim.api.nvim_open_win(dashboard_buf, true, options)
+  vim.wo[dashboard_win].wrap = false
+  vim.wo[dashboard_win].cursorline = true
 end
 
 create_session = function(host, lines)
@@ -325,6 +362,7 @@ function M.open(host)
   if not session or not vim.api.nvim_buf_is_valid(session.buf) then
     session = create_session(host, saved_hosts[host])
   end
+  close_dashboard()
   focus(session.buf)
   render(session)
 end
@@ -333,7 +371,16 @@ function M.forget(host)
   load_hosts()
   if not persist(host, nil) then return end
   local session = sessions[host]
-  if session then vim.api.nvim_buf_delete(session.buf, { force = true }) end
+  if session then
+    local current = vim.api.nvim_get_current_win()
+    -- Delete a displayed host buffer from its normal window, rather than the float.
+    if dashboard_origin and vim.api.nvim_win_is_valid(dashboard_origin)
+      and vim.api.nvim_win_get_buf(dashboard_origin) == session.buf then
+      vim.api.nvim_set_current_win(dashboard_origin)
+    end
+    vim.api.nvim_buf_delete(session.buf, { force = true })
+    if vim.api.nvim_win_is_valid(current) then vim.api.nvim_set_current_win(current) end
+  end
   refresh_dashboard()
 end
 
@@ -349,5 +396,10 @@ function M.stop(host)
 end
 
 vim.api.nvim_create_autocmd("VimLeavePre", { callback = function() M.stop() end })
+vim.api.nvim_create_autocmd("VimResized", { callback = function()
+  if dashboard_win and vim.api.nvim_win_is_valid(dashboard_win) then
+    vim.api.nvim_win_set_config(dashboard_win, dashboard_geometry())
+  end
+end })
 
 return M

@@ -10,11 +10,11 @@ key-based authentication and its host key is accepted; Ito uses SSH batch mode.
 
 ### vim.pack (Neovim 0.12+)
 
-Add to `init.lua`, replacing `YOUR_USERNAME` with the repository owner:
+Add to `init.lua`:
 
 ```lua
 vim.pack.add({
-  { src = "https://github.com/YOUR_USERNAME/ito.nvim" },
+  { src = "https://github.com/ryuichi24/ito.nvim" },
 })
 ```
 

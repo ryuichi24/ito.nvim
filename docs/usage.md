@@ -80,15 +80,33 @@ and `127.0.0.1:8080`) can conflict; SSH reports a bind failure if a port is occu
 ## Port discovery
 
 Press `gp` in a host buffer to list local and remote **listening TCP ports**.
-Press Enter on a remote port and enter a free local port on the input page to add a row. You can
-also select a local port first, then a remote port. Listening local ports are
+Each row shows the process name and PID when available, for example:
+
+```text
+# local
+3000   node (pid 12345)
+8080   ssh (pid 12346)
+
+# remote (devbox)
+5432   postgres (pid 456)
+80     nginx (pid 789), nginx (pid 790)
+```
+
+Multiple processes sharing a port are listed on the same row. PIDs in the remote
+section belong to the remote machine. If ownership is hidden by permissions or
+the discovery tool cannot report it, the row says `process unavailable`.
+
+Press Enter on a remote port and enter a free local port on the input page to add
+a row. You can also select a local port first, then a remote port. Listening local ports are
 occupied, so normally choose a different, free local port. Save the host buffer
 to apply added pairs. Adding a pair returns to the host's buffer in the same
 float, with the new row selected. In discovery, `r` refreshes, `q` or Esc returns
 to the host, and `gd` returns to the dashboard.
 
 Discovery uses local `lsof` or `ss`, with `netstat` as a fallback. On the server it
-tries `ss`, `lsof`, then `netstat`. Results are limited by the user's permissions
+tries `ss`, `lsof`, then `netstat`. `ss` requests process information and `lsof`
+uses field output to preserve full command names. The plain `netstat` fallback
+reports ports without ownership. Results are limited by the user's permissions
 and represent listeners, not every established connection. Remote discovery
 requires a POSIX-compatible shell. A remote port does not need to be listed to
 be forwarded: you can always type its number directly.
@@ -96,6 +114,22 @@ be forwarded: you can always type its number directly.
 Discovery scans the SSH machine itself, not arbitrary destination hosts. Pairs
 added from discovery explicitly target `127.0.0.1` on that machine, even if you
 configured another remote default. Edit that address if the listener requires it.
+
+### Stopping a listener
+
+Press `k` on a port row to send **SIGTERM** to its listening process. For a local
+row, Ito signals the local PID; for a remote row, it runs `kill -TERM PID` through
+that host's SSH connection. If multiple processes share a port, a process picker
+opens in the same float: Enter stops the selected PID, and `q` or Esc returns.
+
+Ito rechecks that the process still owns the port before sending the signal and
+refreshes discovery afterward. This stops the whole process, including any other
+ports it owns. It requires normal user permissions and does not use sudo or force
+termination. Neovim itself cannot be stopped through Ito's local port list.
+
+SIGTERM requests shutdown; a process can ignore it, or a service manager can
+restart it. Check the refreshed list before reusing the port. To stop an Ito
+forward, you can also delete its row and save, or stop the host from the dashboard.
 
 ## Status and lifecycle
 

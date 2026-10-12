@@ -218,7 +218,7 @@ local function show_ports(session)
   local generation = 0
   local function draw()
     if not vim.api.nvim_buf_is_valid(buf) then return end
-    local lines = { "# Listening TCP ports — r refresh, q back, gd dashboard", "# Enter on local, then remote, to add a pair",
+    local lines = { "# Listening TCP ports — k stop process, r refresh, q back, gd dashboard", "# PORT   PROCESS (pid) — Enter selects a port",
       "# Used local ports cannot be bound again; type a free port in the forwarding buffer.",
       "# Selected local: " .. (selected or "none"), "" }
     rows = {}
@@ -227,9 +227,9 @@ local function show_ports(session)
       if errors[side] then lines[#lines + 1] = "# " .. errors[side]
       elseif not results[side] then lines[#lines + 1] = "# Scanning…"
       elseif #results[side] == 0 then lines[#lines + 1] = "# No visible listeners" end
-      for _, port in ipairs(results[side] or {}) do
-        lines[#lines + 1] = tostring(port)
-        rows[#lines] = { side = side, port = port }
+      for _, listener in ipairs(results[side] or {}) do
+        lines[#lines + 1] = require("ito.ports").describe(listener)
+        rows[#lines] = { side = side, port = listener.port, listener = listener }
       end
       lines[#lines + 1] = ""
     end
@@ -255,6 +255,46 @@ local function show_ports(session)
     vim.keymap.set("n", key, function() M.open(session.host) end, { buffer = buf, desc = "Back to host" })
   end
   vim.keymap.set("n", "gd", M.dashboard, { buffer = buf, desc = "Open SSH dashboard" })
+  vim.keymap.set("n", "k", function()
+    local entry = rows[vim.api.nvim_win_get_cursor(0)[1]]
+    if not entry then return end
+    if #entry.listener.processes == 0 then
+      notify("Process ownership is unavailable for this port", vim.log.levels.WARN)
+      return
+    end
+    local function terminate(process, view_buf)
+      require("ito.ports").terminate(entry.side == "remote" and session.host or nil,
+        entry.listener, process, config, function(ok, err)
+          if not ok then notify(err, vim.log.levels.ERROR)
+          else notify(("SIGTERM sent to %s (pid %d) on %s"):format(process.name, process.pid,
+            entry.side == "remote" and session.host or "local machine")) end
+          vim.defer_fn(function()
+            if dashboard_win and vim.api.nvim_win_is_valid(dashboard_win)
+              and vim.api.nvim_win_get_buf(dashboard_win) == view_buf then show_ports(session) end
+          end, 150)
+        end)
+    end
+    if #entry.listener.processes == 1 then terminate(entry.listener.processes[1], buf); return end
+    local picker = vim.api.nvim_create_buf(false, true)
+    vim.bo[picker].bufhidden = "wipe"
+    vim.bo[picker].filetype = "itoprocesses"
+    local lines = { "# Select a process to stop on " .. entry.side .. " port " .. entry.port,
+      "# Enter sends SIGTERM; q or Esc returns to ports", "" }
+    for _, process in ipairs(entry.listener.processes) do
+      lines[#lines + 1] = ("%s (pid %d)"):format(process.name, process.pid)
+    end
+    vim.api.nvim_buf_set_lines(picker, 0, -1, false, lines)
+    vim.bo[picker].modifiable = false
+    vim.keymap.set("n", "<CR>", function()
+      local process = entry.listener.processes[vim.api.nvim_win_get_cursor(0)[1] - 3]
+      if process then terminate(process, picker) end
+    end, { buffer = picker, desc = "Stop selected process" })
+    for _, key in ipairs({ "q", "<Esc>" }) do
+      vim.keymap.set("n", key, function() show_ports(session) end, { buffer = picker, desc = "Back to ports" })
+    end
+    show_view(picker, "Stop process")
+    vim.api.nvim_win_set_cursor(dashboard_win, { 4, 0 })
+  end, { buffer = buf, desc = "Stop process using this port" })
   vim.keymap.set("n", "<CR>", function()
     local entry = rows[vim.api.nvim_win_get_cursor(0)[1]]
     if not entry then return end

@@ -23,9 +23,21 @@ local defaults = assert(ito.parse({ "8080 -> 80", "0.0.0.0:8081 -> web.internal:
 assert(defaults[1].bind_address == "localhost" and defaults[1].remote_address == "db.internal")
 assert(defaults[2].bind_address == "0.0.0.0" and defaults[2].remote_address == "web.internal")
 ito.setup({ default_bind_address = "127.0.0.1", default_remote_address = "127.0.0.1" })
-assert(vim.deep_equal(ports.parse("LISTEN 0 128 127.0.0.1:3000 0.0.0.0:*\nLISTEN 0 128 [::]:80 [::]:*"), { 80, 3000 }))
-assert(vim.deep_equal(ports.parse("node 123 user 1u IPv4 0x0 0t0 TCP *:8080 (LISTEN)"), { 8080 }))
-assert(vim.deep_equal(ports.parse("tcp4 0 0 127.0.0.1.5432 *.* LISTEN"), { 5432 }))
+assert(vim.deep_equal(ports.parse("LISTEN 0 128 127.0.0.1:3000 0.0.0.0:*\nLISTEN 0 128 [::]:80 [::]:*"),
+  { { port = 80, processes = {} }, { port = 3000, processes = {} } }))
+assert(vim.deep_equal(ports.parse("node 123 user 1u IPv4 0x0 0t0 TCP *:8080 (LISTEN)"),
+  { { port = 8080, processes = { { name = "node", pid = 123 } } } }))
+assert(vim.deep_equal(ports.parse("tcp4 0 0 127.0.0.1.5432 *.* LISTEN"), { { port = 5432, processes = {} } }))
+local ss_listeners = ports.parse('LISTEN 0 128 [::]:80 [::]:* users:(("nginx",pid=20,fd=7),("nginx",pid=10,fd=7))\n'
+  .. 'LISTEN 0 128 0.0.0.0:80 0.0.0.0:* users:(("nginx",pid=10,fd=8))')
+assert(vim.deep_equal(ss_listeners, { { port = 80, processes = {
+  { name = "nginx", pid = 10 }, { name = "nginx", pid = 20 },
+} } }))
+local lsof_listeners = ports.parse("p123\ncnode\nn127.0.0.1:8080\nn[::1]:8080\np456\ncPython Helper\nn*:8080\nn*:9000\n")
+assert(#lsof_listeners == 2 and #lsof_listeners[1].processes == 2)
+assert(lsof_listeners[2].processes[1].name == "Python Helper" and lsof_listeners[2].processes[1].pid == 456)
+assert(ports.describe(lsof_listeners[1]):find("node (pid 123)", 1, true))
+assert(ports.describe({ port = 5432, processes = {} }):find("process unavailable", 1, true))
 
 -- Exercise reconciliation with a mock SSH process, without a remote server.
 local starts, stops, callbacks = {}, {}, {}
@@ -158,7 +170,15 @@ ito.setup({ default_remote_address = "db.internal" })
 vim.cmd("write")
 assert(forward_arg(starts[#starts]) == "127.0.0.1:8080:db.internal:80")
 local original_scan = ports.scan
-ports.scan = function(host, _, callback) callback(host and { 5432 } or {}) end
+local original_terminate = ports.terminate
+local stopped_processes = {}
+ports.terminate = function(host, listener, process, _, callback)
+  stopped_processes[#stopped_processes + 1] = { host = host, port = listener.port, pid = process.pid }
+  callback(true)
+end
+ports.scan = function(host, _, callback)
+  callback(host and { { port = 5432, processes = { { name = "postgres", pid = 456 } } } } or {})
+end
 local function buffer_key(buffer, key)
   for _, mapping in ipairs(vim.api.nvim_buf_get_keymap(buffer, "n")) do
     if mapping.lhs == key then mapping.callback(); return end
@@ -171,8 +191,17 @@ buffer_key(gateway, "gp")
 assert(vim.api.nvim_get_current_win() == unified_window)
 assert(#vim.api.nvim_list_wins() == window_count)
 local port_buf = vim.api.nvim_get_current_buf()
+assert(table.concat(vim.api.nvim_buf_get_lines(port_buf, 0, -1, false), "\n"):find("postgres (pid 456)", 1, true))
 for row, line in ipairs(vim.api.nvim_buf_get_lines(port_buf, 0, -1, false)) do
-  if line == "5432" then vim.api.nvim_win_set_cursor(0, { row, 0 }); break end
+  if line:match("^5432%s") then vim.api.nvim_win_set_cursor(0, { row, 0 }); break end
+end
+buffer_key(port_buf, "k")
+assert(stopped_processes[1].host == "gateway" and stopped_processes[1].pid == 456)
+assert(vim.wait(1000, function() return not vim.api.nvim_buf_is_valid(port_buf) end, 10))
+port_buf = vim.api.nvim_get_current_buf()
+assert(vim.api.nvim_get_current_win() == unified_window)
+for row, line in ipairs(vim.api.nvim_buf_get_lines(port_buf, 0, -1, false)) do
+  if line:match("^5432%s") then vim.api.nvim_win_set_cursor(0, { row, 0 }); break end
 end
 buffer_key(port_buf, "<CR>")
 local input_buf = vim.api.nvim_get_current_buf()
@@ -195,7 +224,7 @@ assert(vim.api.nvim_get_current_buf() == gateway and vim.api.nvim_get_current_wi
 buffer_key(gateway, "gp")
 port_buf = vim.api.nvim_get_current_buf()
 for row, line in ipairs(vim.api.nvim_buf_get_lines(port_buf, 0, -1, false)) do
-  if line == "5432" then vim.api.nvim_win_set_cursor(0, { row, 0 }); break end
+  if line:match("^5432%s") then vim.api.nvim_win_set_cursor(0, { row, 0 }); break end
 end
 buffer_key(port_buf, "<CR>")
 buffer_key(vim.api.nvim_get_current_buf(), "<Esc>")
@@ -204,8 +233,26 @@ buffer_key(vim.api.nvim_get_current_buf(), "gd")
 assert(vim.bo.filetype == "itodashboard" and vim.bo[gateway].modified)
 ito.open("gateway")
 assert(#vim.api.nvim_list_wins() == window_count)
+ports.scan = function(host, _, callback)
+  callback(host and { { port = 5432, processes = { { name = "postgres", pid = 456 },
+    { name = "postgres", pid = 457 } } } } or {})
+end
+buffer_key(gateway, "gp")
+port_buf = vim.api.nvim_get_current_buf()
+for row, line in ipairs(vim.api.nvim_buf_get_lines(port_buf, 0, -1, false)) do
+  if line:match("^5432%s") then vim.api.nvim_win_set_cursor(0, { row, 0 }); break end
+end
+buffer_key(port_buf, "k")
+local picker = vim.api.nvim_get_current_buf()
+assert(vim.bo[picker].filetype == "itoprocesses" and vim.api.nvim_get_current_win() == unified_window)
+vim.api.nvim_win_set_cursor(0, { 5, 0 })
+buffer_key(picker, "<CR>")
+assert(stopped_processes[2].pid == 457 and stopped_processes[2].port == 5432)
+assert(vim.wait(1000, function() return not vim.api.nvim_buf_is_valid(picker) end, 10))
+buffer_key(vim.api.nvim_get_current_buf(), "q")
 vim.cmd("close")
 ports.scan = original_scan
+ports.terminate = original_terminate
 vim.api.nvim_buf_delete(gateway, { force = true })
 ito.setup({ default_remote_address = "127.0.0.1" })
 ito.open("forgotten")
@@ -237,5 +284,27 @@ assert(vim.api.nvim_get_current_win() == dashboard_window)
 buffer_key(current_dashboard, "q")
 assert(vim.api.nvim_get_current_win() == origin_win)
 assert(vim.api.nvim_get_current_buf() == origin_buf)
+-- Verify ownership against a real TCP listener in this Neovim process.
+if vim.fn.executable("lsof") == 1 or vim.fn.executable("ss") == 1 then
+  local server = assert(vim.uv.new_tcp())
+  assert(server:bind("127.0.0.1", 0))
+  assert(server:listen(1, function() end))
+  local port = server:getsockname().port
+  local completed, owned, scan_error = false, false, nil
+  ports.scan(nil, {}, function(listeners, err)
+    scan_error = err
+    for _, listener in ipairs(listeners or {}) do
+      if listener.port == port then
+        for _, process in ipairs(listener.processes) do
+          if process.pid == vim.fn.getpid() then owned = true end
+        end
+      end
+    end
+    completed = true
+  end)
+  local finished = vim.wait(10000, function() return completed end, 10)
+  server:close()
+  assert(finished and not scan_error and owned, scan_error or "Local listener ownership was not discovered")
+end
 print("ito checks passed")
 vim.fn.delete(data_dir, "rf")

@@ -1,7 +1,8 @@
 # ito.nvim
 
 Manage SSH local port forwarding by editing Neovim buffers, with a dashboard
-for multiple remote machines and local/remote port discovery.
+for multiple remote machines and local/remote port discovery with process names
+and PIDs.
 
 Requires **Neovim 0.10+** and **OpenSSH**. Make sure `ssh your-host` works with
 key-based authentication and its host key is accepted; Ito uses SSH batch mode.
@@ -63,6 +64,7 @@ machine. You can also open a host directly with `:Ito user@host`.
 | Host buffer | `gr` | Refresh status |
 | Host buffer | `q` | Close the floating window |
 | Port discovery | Enter | Select a remote port and choose a local port |
+| Port discovery | `k` | Send SIGTERM to the selected port's process |
 | Port discovery | `r` / `q` | Refresh / back to host |
 | Input page | Enter / Esc | Submit / cancel |
 | Anywhere | `:ItoStop` | Stop all forwards |
@@ -77,4 +79,5 @@ machine. You can also open a host directly with `:Ito user@host`.
 ```sh
 nvim --headless -u NONE -l tests/check.lua
 nvim --headless -u NONE -l tests/persistence.lua
+nvim --headless -u NONE -l tests/processes.lua
 ```

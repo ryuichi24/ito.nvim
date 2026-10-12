@@ -13,10 +13,6 @@ local loaded = false
 local load_error
 local storage = require("ito.storage")
 
-local function focus(buf)
-  vim.cmd("hide buffer " .. buf)
-end
-
 local function dashboard_geometry()
   local available_height = math.max(1, vim.o.lines - vim.o.cmdheight - 3)
   local width = math.max(1, math.min(96, math.floor((vim.o.columns - 2) * 0.85)))
@@ -35,6 +31,45 @@ local function close_dashboard()
     end
   end
   dashboard_win = nil
+end
+
+local function show_view(buf, title)
+  if dashboard_win and vim.api.nvim_win_is_valid(dashboard_win) then
+    vim.api.nvim_set_current_win(dashboard_win)
+    vim.cmd("hide buffer " .. buf)
+    vim.api.nvim_win_set_config(dashboard_win, { title = " Ito — " .. title .. " ", title_pos = "center" })
+  else
+    dashboard_origin = vim.api.nvim_get_current_win()
+    local options = dashboard_geometry()
+    options.style, options.border = "minimal", "rounded"
+    options.title, options.title_pos = " Ito — " .. title .. " ", "center"
+    dashboard_win = vim.api.nvim_open_win(buf, true, options)
+  end
+  vim.wo[dashboard_win].wrap = false
+  vim.wo[dashboard_win].cursorline = true
+end
+
+-- Small editable input pages keep host/port prompts inside the same window too.
+local function input_view(prompt, default, submit, cancel)
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.bo[buf].bufhidden = "wipe"
+  vim.bo[buf].filetype = "itoinput"
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "# " .. prompt, "# Edit below; Enter submit, Esc cancel", default or "" })
+  local function accept()
+    local value = vim.trim(vim.api.nvim_buf_get_lines(buf, 2, 3, false)[1] or "")
+    if value ~= "" then submit(value) end
+  end
+  vim.keymap.set({ "n", "i" }, "<CR>", function()
+    vim.cmd("stopinsert")
+    accept()
+  end, { buffer = buf, desc = "Submit input" })
+  vim.keymap.set({ "n", "i" }, "<Esc>", function()
+    vim.cmd("stopinsert")
+    cancel()
+  end, { buffer = buf, desc = "Cancel input" })
+  show_view(buf, prompt)
+  vim.api.nvim_win_set_cursor(dashboard_win, { 3, #(default or "") })
+  vim.cmd("startinsert!")
 end
 
 local function notify(message, level)
@@ -176,15 +211,14 @@ end
 
 local function show_ports(session)
   local buf = vim.api.nvim_create_buf(false, true)
-  vim.cmd("botright vsplit")
-  vim.api.nvim_win_set_buf(0, buf)
   vim.bo[buf].filetype = "itoports"
   vim.bo[buf].bufhidden = "wipe"
   local results, errors, rows = {}, {}, {}
   local selected
+  local generation = 0
   local function draw()
     if not vim.api.nvim_buf_is_valid(buf) then return end
-    local lines = { "# Listening TCP ports — r refresh, q close", "# Enter on local, then remote, to add a pair",
+    local lines = { "# Listening TCP ports — r refresh, q back, gd dashboard", "# Enter on local, then remote, to add a pair",
       "# Used local ports cannot be bound again; type a free port in the forwarding buffer.",
       "# Selected local: " .. (selected or "none"), "" }
     rows = {}
@@ -204,17 +238,23 @@ local function show_ports(session)
     vim.bo[buf].modifiable = false
   end
   local function refresh()
+    generation = generation + 1
+    local current_generation = generation
     results, errors = {}, {}
     draw()
     for _, side in ipairs({ "local", "remote" }) do
       require("ito.ports").scan(side == "remote" and session.host or nil, config, function(ports, err)
+        if generation ~= current_generation or not vim.api.nvim_buf_is_valid(buf) then return end
         results[side], errors[side] = ports, err
         draw()
       end)
     end
   end
   vim.keymap.set("n", "r", refresh, { buffer = buf })
-  vim.keymap.set("n", "q", "<cmd>close<cr>", { buffer = buf })
+  for _, key in ipairs({ "q", "<Esc>" }) do
+    vim.keymap.set("n", key, function() M.open(session.host) end, { buffer = buf, desc = "Back to host" })
+  end
+  vim.keymap.set("n", "gd", M.dashboard, { buffer = buf, desc = "Open SSH dashboard" })
   vim.keymap.set("n", "<CR>", function()
     local entry = rows[vim.api.nvim_win_get_cursor(0)[1]]
     if not entry then return end
@@ -228,14 +268,14 @@ local function show_ports(session)
       -- Discovery scans the SSH machine itself, independently of destination defaults.
       vim.api.nvim_buf_set_lines(session.buf, -1, -1, false, { ("%d -> 127.0.0.1:%d"):format(port, entry.port) })
       render(session)
-      notify("Pair added; save the forwarding buffer to apply")
+      M.open(session.host)
+      vim.api.nvim_win_set_cursor(dashboard_win, { vim.api.nvim_buf_line_count(session.buf), 0 })
     end
     if selected then insert(selected)
-    else vim.ui.input({ prompt = "Free local port: ", default = tostring(entry.port) }, function(value)
-      if value then insert(value) end
-    end) end
+    else input_view("Free local port", tostring(entry.port), insert, function() show_ports(session) end) end
   end, { buffer = buf })
   refresh()
+  show_view(buf, session.host .. " — ports")
 end
 
 refresh_dashboard = function()
@@ -288,9 +328,7 @@ function M.dashboard()
       if host then M.open(host) end
     end, { buffer = dashboard_buf, desc = "Edit host port pairs" })
     vim.keymap.set("n", "a", function()
-      vim.ui.input({ prompt = "SSH host (or config alias): " }, function(value)
-        if value and value ~= "" then M.open(value) end
-      end)
+      input_view("SSH host (or config alias)", "", M.open, M.dashboard)
     end, { buffer = dashboard_buf, desc = "Add SSH host" })
     vim.keymap.set("n", "s", function()
       local host = host_at_cursor()
@@ -307,19 +345,7 @@ function M.dashboard()
     vim.api.nvim_create_autocmd("BufEnter", { buffer = dashboard_buf, callback = refresh_dashboard })
   end
   refresh_dashboard()
-  if dashboard_win and vim.api.nvim_win_is_valid(dashboard_win) then
-    vim.api.nvim_set_current_win(dashboard_win)
-    return
-  end
-  dashboard_origin = vim.api.nvim_get_current_win()
-  local options = dashboard_geometry()
-  options.style = "minimal"
-  options.border = "rounded"
-  options.title = " Ito — SSH forwards "
-  options.title_pos = "center"
-  dashboard_win = vim.api.nvim_open_win(dashboard_buf, true, options)
-  vim.wo[dashboard_win].wrap = false
-  vim.wo[dashboard_win].cursorline = true
+  show_view(dashboard_buf, "SSH forwards")
 end
 
 create_session = function(host, lines)
@@ -332,7 +358,7 @@ create_session = function(host, lines)
   vim.bo[session.buf].filetype = "ito"
   vim.api.nvim_buf_set_lines(session.buf, 0, -1, false, lines or {
     "# SSH local forwarding: " .. host,
-    "# LOCAL -> REMOTE   |   :w apply   |   gp ports   |   gr status   |   gd dashboard",
+    "# LOCAL -> REMOTE   |   :w apply   |   gp ports   |   gr status   |   gd dashboard   |   q close",
     "# Each side: PORT or ADDRESS:PORT (IPv6: [::1]:PORT). Delete a row and save to stop it.", "",
   })
   vim.bo[session.buf].modified = false
@@ -349,6 +375,7 @@ create_session = function(host, lines)
   vim.keymap.set("n", "gp", function() show_ports(session) end, { buffer = session.buf, desc = "Show listening ports" })
   vim.keymap.set("n", "gr", function() render(session) end, { buffer = session.buf, desc = "Refresh forwarding status" })
   vim.keymap.set("n", "gd", M.dashboard, { buffer = session.buf, desc = "Open SSH dashboard" })
+  vim.keymap.set("n", "q", close_dashboard, { buffer = session.buf, desc = "Close Ito window" })
   return session
 end
 
@@ -362,8 +389,7 @@ function M.open(host)
   if not session or not vim.api.nvim_buf_is_valid(session.buf) then
     session = create_session(host, saved_hosts[host])
   end
-  close_dashboard()
-  focus(session.buf)
+  show_view(session.buf, session.host .. " — forwards")
   render(session)
 end
 
@@ -372,6 +398,8 @@ function M.forget(host)
   if not persist(host, nil) then return end
   local session = sessions[host]
   if session then
+    if dashboard_win and vim.api.nvim_win_is_valid(dashboard_win)
+      and vim.api.nvim_win_get_buf(dashboard_win) == session.buf then M.dashboard() end
     local current = vim.api.nvim_get_current_win()
     -- Delete a displayed host buffer from its normal window, rather than the float.
     if dashboard_origin and vim.api.nvim_win_is_valid(dashboard_origin)

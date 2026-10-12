@@ -31,7 +31,7 @@ No setup call is required. See [configuration](docs/configuration.md) for option
 ## Quick start
 
 1. Run `:Ito` to open the floating dashboard.
-2. Press `a` and enter an SSH hostname, `user@host`, or SSH config alias.
+2. Press `a`, enter an SSH hostname, `user@host`, or SSH config alias, and press Enter.
 3. Edit port pairs in that host's buffer:
 
    ```text
@@ -42,6 +42,9 @@ No setup call is required. See [configuration](docs/configuration.md) for option
 4. Save with `:w` to apply. Edit a row to replace a forward, or delete it and save
    to stop it.
 5. Press `gd` to return to the dashboard. Press Enter on a host to edit its pairs.
+
+The dashboard, editable host buffers, port discovery, and input pages all share
+one floating window. Your underlying editing window stays untouched.
 
 Saving also persists your hosts and port pairs in `stdpath("data")/ito/forwards.json`.
 They return next time you open Ito; save a host's buffer to start its forwards.
@@ -58,8 +61,10 @@ machine. You can also open a host directly with `:Ito user@host`.
 | Host buffer | `:w` | Apply edited port pairs |
 | Host buffer | `gp` / `gd` | Port discovery / dashboard |
 | Host buffer | `gr` | Refresh status |
+| Host buffer | `q` | Close the floating window |
 | Port discovery | Enter | Select a remote port and choose a local port |
-| Port discovery | `r` / `q` | Refresh / close |
+| Port discovery | `r` / `q` | Refresh / back to host |
+| Input page | Enter / Esc | Submit / cancel |
 | Anywhere | `:ItoStop` | Stop all forwards |
 
 ## Documentation

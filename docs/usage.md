@@ -23,10 +23,14 @@ staging  [1 running]
 - Unsaved edits are marked; switching hosts preserves them without applying them.
 - `q` or Esc closes the dashboard and returns to your previous window.
 
-Selecting or adding a host closes the float and opens its editable buffer in
-the previous window. `gd` brings the dashboard back without replacing that
-window's buffer. The float resizes with Neovim; opening it again focuses the
-existing dashboard rather than creating another window.
+All views share the same floating window. Selecting or adding a host switches
+its contents to the host's editable buffer; `gd` switches back to the dashboard.
+Port discovery and host/local-port input pages use that window too. Input pages
+start in insert mode: edit the value and press Enter to submit or Esc to cancel.
+Your underlying editing window and its buffer stay untouched.
+
+The float resizes with Neovim. Running `:Ito` again switches the existing float
+to the dashboard rather than creating another window.
 
 Open a host directly with `:Ito my-server`, where `my-server` is an SSH config
 alias, hostname, or `user@host`.
@@ -66,6 +70,7 @@ rejected before any running forwards are changed.
 - `gp` opens local and remote port discovery.
 - `gr` refreshes inline forwarding status.
 - `gd` returns to the dashboard.
+- `q` in normal mode closes the floating window, retaining unsaved edits in memory.
 - `:ItoStop` stops every forward, leaving rows available to restart with `:w`.
 
 Hosts share the same local address/port space. Normally use different local ports
@@ -75,10 +80,12 @@ and `127.0.0.1:8080`) can conflict; SSH reports a bind failure if a port is occu
 ## Port discovery
 
 Press `gp` in a host buffer to list local and remote **listening TCP ports**.
-Press Enter on a remote port and enter a free local port to add a row. You can
+Press Enter on a remote port and enter a free local port on the input page to add a row. You can
 also select a local port first, then a remote port. Listening local ports are
 occupied, so normally choose a different, free local port. Save the host buffer
-to apply added pairs. In the discovery split, `r` refreshes and `q` closes it.
+to apply added pairs. Adding a pair returns to the host's buffer in the same
+float, with the new row selected. In discovery, `r` refreshes, `q` or Esc returns
+to the host, and `gd` returns to the dashboard.
 
 Discovery uses local `lsof` or `ss`, with `netstat` as a fallback. On the server it
 tries `ss`, `lsof`, then `netstat`. Results are limited by the user's permissions

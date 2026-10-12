@@ -13,6 +13,9 @@ local function disk()
 end
 local function restart()
   ito.stop()
+  for _, win in ipairs(vim.api.nvim_list_wins()) do
+    if vim.api.nvim_win_get_config(win).relative ~= "" then vim.api.nvim_win_close(win, true) end
+  end
   for _, buf in ipairs(vim.api.nvim_list_bufs()) do
     if vim.api.nvim_buf_is_valid(buf) and vim.api.nvim_buf_get_name(buf):match("^ito[%w%-]*://") then
       vim.api.nvim_buf_delete(buf, { force = true })

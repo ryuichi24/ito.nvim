@@ -1,4 +1,8 @@
 vim.opt.runtimepath:prepend(vim.fn.getcwd())
+-- Keep checks isolated from the user's persisted forwarding definitions.
+local data_dir = vim.fn.tempname()
+local stdpath = vim.fn.stdpath
+vim.fn.stdpath = function(kind) return kind == "data" and data_dir or stdpath(kind) end
 local ito = require("ito")
 local ports = require("ito.ports")
 local mappings = assert(ito.parse({ "# comment", "", "3000 -> 80", " 15432 -> 5432 " }))
@@ -151,3 +155,4 @@ ports.scan, vim.ui.input = original_scan, original_input
 vim.api.nvim_buf_delete(gateway, { force = true })
 ito.setup({ default_remote_address = "127.0.0.1" })
 print("ito checks passed")
+vim.fn.delete(data_dir, "rf")

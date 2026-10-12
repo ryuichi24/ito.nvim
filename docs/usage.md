@@ -18,6 +18,7 @@ staging  [1 running]
 - `a` prompts for an SSH destination and opens its forwarding buffer.
 - Enter on a host or one of its pairs opens that host's editable buffer.
 - `s` stops only the selected host's forwards, retaining its definitions.
+- `d` forgets the selected host's saved definitions and stops its forwards.
 - `r` refreshes the overview. Status also updates when forwards change.
 - Unsaved edits are marked; switching hosts preserves them without applying them.
 
@@ -91,4 +92,32 @@ inline and through notifications; save again to retry.
 
 Applying changes is not transactional: a failed replacement does not restore
 the old forward. Hiding a buffer keeps its forwards alive. Wiping it or exiting
-Neovim stops them. Forward definitions are session-only.
+Neovim stops them. Saved forward definitions persist across sessions.
+
+## Persistence
+
+`:w` validates and saves the host's entire buffer (including comments and blank
+lines), then applies its forwards. Definitions are stored as versioned JSON in
+`stdpath("data")/ito/forwards.json`, typically
+`~/.local/share/nvim/ito/forwards.json`. To see your actual path:
+
+```vim
+:lua print(vim.fn.stdpath("data") .. "/ito/forwards.json")
+```
+
+The saved hosts are restored when you first open Ito. SSH processes and connection
+status are not persisted: restored forwards stay stopped until you save their
+host buffer. Unsaved edits are not persisted, and saving one host does not save
+another host's pending edits. Address omissions remain omissions, so the current
+configured defaults still apply after restoring.
+
+Stopping forwards or wiping a buffer does not delete its saved definitions.
+Reopening a wiped host restores its last saved buffer. Use `d` on the dashboard
+to forget a host permanently, including any unsaved edits. Deleting a pair and
+saving removes it from the saved definitions.
+
+Writes use a temporary file and rename to avoid leaving a partial JSON file.
+If a file cannot be loaded or a write fails, Ito reports the error; it does not
+apply the pending forwards or mark the buffer as saved. A malformed file is left
+intact: fix or move it and restart Neovim before saving again. Multiple Neovim
+instances share this file; concurrent saves use the last writer's snapshot.

@@ -5,6 +5,11 @@ local ns = vim.api.nvim_create_namespace("ito")
 local dashboard_buf
 local dashboard_rows = {}
 local refresh_dashboard
+local create_session
+local saved_hosts = {}
+local loaded = false
+local load_error
+local storage = require("ito.storage")
 
 local function focus(buf)
   vim.cmd("hide buffer " .. buf)
@@ -64,6 +69,28 @@ function M.parse(lines)
   return pairs
 end
 
+local function load_hosts()
+  if loaded then return end
+  loaded = true
+  saved_hosts, load_error = storage.load(M.parse)
+  if not saved_hosts then
+    saved_hosts = {}
+    notify(load_error, vim.log.levels.ERROR)
+    return
+  end
+  for host, lines in pairs(saved_hosts) do create_session(host, lines) end
+end
+
+local function persist(host, lines)
+  if load_error then notify(load_error, vim.log.levels.ERROR); return false end
+  local updated = vim.deepcopy(saved_hosts)
+  updated[host] = lines
+  local ok, err = storage.save(updated)
+  if not ok then notify(err, vim.log.levels.ERROR); return false end
+  saved_hosts = updated
+  return true
+end
+
 local function render(session)
   if not vim.api.nvim_buf_is_valid(session.buf) then return end
   vim.api.nvim_buf_clear_namespace(session.buf, ns, 0, -1)
@@ -86,6 +113,7 @@ end
 local function apply(session)
   local mappings, err = M.parse(vim.api.nvim_buf_get_lines(session.buf, 0, -1, false))
   if not mappings then notify(err, vim.log.levels.ERROR); return end
+  if not persist(session.host, vim.api.nvim_buf_get_lines(session.buf, 0, -1, false)) then return end
   local wanted = {}
   for _, pair in ipairs(mappings) do wanted[pair.key] = pair end
   for key, job in pairs(session.jobs) do
@@ -191,7 +219,7 @@ end
 refresh_dashboard = function()
   if not dashboard_buf or not vim.api.nvim_buf_is_valid(dashboard_buf) then return end
   local lines = { "# Ito — SSH forwarding dashboard",
-    "# <Enter> edit host   a add host   s stop host   r refresh", "" }
+    "# <Enter> edit host   a add host   s stop host   d forget host   r refresh", "" }
   dashboard_rows = {}
   local hosts = vim.tbl_keys(sessions)
   table.sort(hosts)
@@ -226,6 +254,7 @@ refresh_dashboard = function()
 end
 
 function M.dashboard()
+  load_hosts()
   if not dashboard_buf or not vim.api.nvim_buf_is_valid(dashboard_buf) then
     dashboard_buf = vim.api.nvim_create_buf(false, true)
     vim.api.nvim_buf_set_name(dashboard_buf, "ito-dashboard://overview")
@@ -245,6 +274,10 @@ function M.dashboard()
       local host = host_at_cursor()
       if host then M.stop(host) end
     end, { buffer = dashboard_buf, desc = "Stop host forwards" })
+    vim.keymap.set("n", "d", function()
+      local host = host_at_cursor()
+      if host then M.forget(host) end
+    end, { buffer = dashboard_buf, desc = "Forget host and stop forwards" })
     vim.keymap.set("n", "r", refresh_dashboard, { buffer = dashboard_buf, desc = "Refresh dashboard" })
     vim.api.nvim_create_autocmd("BufEnter", { buffer = dashboard_buf, callback = refresh_dashboard })
   end
@@ -252,23 +285,15 @@ function M.dashboard()
   focus(dashboard_buf)
 end
 
-function M.open(host)
-  if not host then M.dashboard(); return end
-  if host:match("^%-") or host:find("[%s%c]") then
-    notify("Use an SSH hostname, user@host, or config alias", vim.log.levels.ERROR); return
-  end
-  local session = sessions[host]
-  if session and vim.api.nvim_buf_is_valid(session.buf) then
-    focus(session.buf); return
-  end
-  session = { host = host, jobs = {}, buf = vim.api.nvim_create_buf(true, false) }
+create_session = function(host, lines)
+  local session = { host = host, jobs = {}, buf = vim.api.nvim_create_buf(true, false) }
   sessions[host] = session
   vim.api.nvim_buf_set_name(session.buf, "ito://" .. host)
   vim.bo[session.buf].buftype = "acwrite"
   vim.bo[session.buf].bufhidden = "hide"
   vim.bo[session.buf].swapfile = false
   vim.bo[session.buf].filetype = "ito"
-  vim.api.nvim_buf_set_lines(session.buf, 0, -1, false, {
+  vim.api.nvim_buf_set_lines(session.buf, 0, -1, false, lines or {
     "# SSH local forwarding: " .. host,
     "# LOCAL -> REMOTE   |   :w apply   |   gp ports   |   gr status   |   gd dashboard",
     "# Each side: PORT or ADDRESS:PORT (IPv6: [::1]:PORT). Delete a row and save to stop it.", "",
@@ -287,7 +312,28 @@ function M.open(host)
   vim.keymap.set("n", "gp", function() show_ports(session) end, { buffer = session.buf, desc = "Show listening ports" })
   vim.keymap.set("n", "gr", function() render(session) end, { buffer = session.buf, desc = "Refresh forwarding status" })
   vim.keymap.set("n", "gd", M.dashboard, { buffer = session.buf, desc = "Open SSH dashboard" })
+  return session
+end
+
+function M.open(host)
+  if not host then M.dashboard(); return end
+  if host == "" or host:match("^%-") or host:find("[%s%c]") then
+    notify("Use an SSH hostname, user@host, or config alias", vim.log.levels.ERROR); return
+  end
+  load_hosts()
+  local session = sessions[host]
+  if not session or not vim.api.nvim_buf_is_valid(session.buf) then
+    session = create_session(host, saved_hosts[host])
+  end
   focus(session.buf)
+  render(session)
+end
+
+function M.forget(host)
+  load_hosts()
+  if not persist(host, nil) then return end
+  local session = sessions[host]
+  if session then vim.api.nvim_buf_delete(session.buf, { force = true }) end
   refresh_dashboard()
 end
 

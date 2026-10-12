@@ -43,6 +43,9 @@ No setup call is required. See [configuration](docs/configuration.md) for option
    to stop it.
 5. Press `gd` to return to the dashboard. Press Enter on a host to edit its pairs.
 
+Saving also persists your hosts and port pairs in `stdpath("data")/ito/forwards.json`.
+They return next time you open Ito; save a host's buffer to start its forwards.
+
 `8080 -> 3000` forwards your `localhost:8080` to `localhost:3000` on the SSH
 machine. You can also open a host directly with `:Ito user@host`.
 
@@ -50,6 +53,7 @@ machine. You can also open a host directly with `:Ito user@host`.
 | --- | --- | --- |
 | Dashboard | `a` / Enter | Add / edit a host |
 | Dashboard | `s` / `r` | Stop selected host / refresh |
+| Dashboard | `d` | Forget selected host and stop its forwards |
 | Host buffer | `:w` | Apply edited port pairs |
 | Host buffer | `gp` / `gd` | Port discovery / dashboard |
 | Host buffer | `gr` | Refresh status |
@@ -66,4 +70,5 @@ machine. You can also open a host directly with `:Ito user@host`.
 
 ```sh
 nvim --headless -u NONE -l tests/check.lua
+nvim --headless -u NONE -l tests/persistence.lua
 ```

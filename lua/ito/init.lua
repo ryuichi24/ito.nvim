@@ -8,6 +8,7 @@ local dashboard_origin
 local dashboard_rows = {}
 local refresh_dashboard
 local create_session
+local check_status
 local saved_hosts = {}
 local loaded = false
 local load_error
@@ -105,6 +106,16 @@ local function matches(job, pair)
   return job and job.remote_address == pair.remote_address and job.remote_port == pair.remote_port
 end
 
+local function pair_status(session, pair)
+  local job = session.jobs[pair.key]
+  if matches(job, pair) then return job.status end
+  -- Edited destinations still need applying, even if the old forward listens.
+  if job then return "not applied" end
+  local observed = session.observed[pair.key]
+  if observed and observed.text == pair.text then return observed.status end
+  return "not applied"
+end
+
 function M.parse(lines)
   local pairs, seen = {}, {}
   for row, line in ipairs(lines) do
@@ -153,14 +164,36 @@ local function render(session)
   vim.api.nvim_buf_clear_namespace(session.buf, ns, 0, -1)
   local pairs = M.parse(vim.api.nvim_buf_get_lines(session.buf, 0, -1, false))
   for _, pair in ipairs(pairs or {}) do
-    local job = session.jobs[pair.key]
-    local status = "not applied"
-    if matches(job, pair) then status = job.status end
+    local status = pair_status(session, pair)
     vim.api.nvim_buf_set_extmark(session.buf, ns, pair.row - 1, 0, {
       virt_text = { { "  " .. status, status == "running" and "DiagnosticOk" or "DiagnosticWarn" } },
     })
   end
   if refresh_dashboard then refresh_dashboard() end
+end
+
+check_status = function(session)
+  session.generation = session.generation + 1
+  local generation = session.generation
+  session.observed = {}
+  local mappings = M.parse(vim.api.nvim_buf_get_lines(session.buf, 0, -1, false))
+  for _, pair in ipairs(mappings or {}) do
+    if not session.jobs[pair.key] then
+      session.observed[pair.key] = { text = pair.text, status = "checking" }
+      require("ito.status").check(pair, function(listening)
+        if sessions[session.host] ~= session or session.generation ~= generation then return end
+        session.observed[pair.key] = { text = pair.text,
+          status = listening and "listening (external)" or "not applied" }
+        render(session)
+      end)
+    end
+  end
+  render(session)
+end
+
+local function refresh_status()
+  for _, session in pairs(sessions) do check_status(session) end
+  refresh_dashboard()
 end
 
 local function stop_job(job)
@@ -171,6 +204,8 @@ local function apply(session)
   local mappings, err = M.parse(vim.api.nvim_buf_get_lines(session.buf, 0, -1, false))
   if not mappings then notify(err, vim.log.levels.ERROR); return end
   if not persist(session.host, vim.api.nvim_buf_get_lines(session.buf, 0, -1, false)) then return end
+  session.generation = session.generation + 1
+  session.observed = {}
   local wanted = {}
   for _, pair in ipairs(mappings) do wanted[pair.key] = pair end
   for key, job in pairs(session.jobs) do
@@ -342,8 +377,7 @@ refresh_dashboard = function()
       dashboard_rows[#lines] = host
     else
       for _, pair in ipairs(mappings) do
-        local job = session.jobs[pair.key]
-        local status = matches(job, pair) and job.status or "not applied"
+        local status = pair_status(session, pair)
         lines[#lines + 1] = ("  %s  [%s]"):format(pair.text, status)
         dashboard_rows[#lines] = host
       end
@@ -378,18 +412,18 @@ function M.dashboard()
       local host = host_at_cursor()
       if host then M.forget(host) end
     end, { buffer = dashboard_buf, desc = "Forget host and stop forwards" })
-    vim.keymap.set("n", "r", refresh_dashboard, { buffer = dashboard_buf, desc = "Refresh dashboard" })
+    vim.keymap.set("n", "r", refresh_status, { buffer = dashboard_buf, desc = "Refresh dashboard" })
     for _, key in ipairs({ "q", "<Esc>" }) do
       vim.keymap.set("n", key, close_dashboard, { buffer = dashboard_buf, desc = "Close dashboard" })
     end
-    vim.api.nvim_create_autocmd("BufEnter", { buffer = dashboard_buf, callback = refresh_dashboard })
+    vim.api.nvim_create_autocmd("BufEnter", { buffer = dashboard_buf, callback = refresh_status })
   end
-  refresh_dashboard()
+  refresh_status()
   show_view(dashboard_buf, "SSH forwards")
 end
 
 create_session = function(host, lines)
-  local session = { host = host, jobs = {}, buf = vim.api.nvim_create_buf(true, false) }
+  local session = { host = host, jobs = {}, observed = {}, generation = 0, buf = vim.api.nvim_create_buf(true, false) }
   sessions[host] = session
   vim.api.nvim_buf_set_name(session.buf, "ito://" .. host)
   vim.bo[session.buf].buftype = "acwrite"
@@ -413,7 +447,7 @@ create_session = function(host, lines)
     refresh_dashboard()
   end })
   vim.keymap.set("n", "gp", function() show_ports(session) end, { buffer = session.buf, desc = "Show listening ports" })
-  vim.keymap.set("n", "gr", function() render(session) end, { buffer = session.buf, desc = "Refresh forwarding status" })
+  vim.keymap.set("n", "gr", function() check_status(session) end, { buffer = session.buf, desc = "Refresh forwarding status" })
   vim.keymap.set("n", "gd", M.dashboard, { buffer = session.buf, desc = "Open SSH dashboard" })
   vim.keymap.set("n", "q", close_dashboard, { buffer = session.buf, desc = "Close Ito window" })
   return session
@@ -430,7 +464,7 @@ function M.open(host)
     session = create_session(host, saved_hosts[host])
   end
   show_view(session.buf, session.host .. " — forwards")
-  render(session)
+  check_status(session)
 end
 
 function M.forget(host)
@@ -455,6 +489,8 @@ end
 function M.stop(host)
   for name, session in pairs(sessions) do
     if not host or name == host then
+      session.generation = session.generation + 1
+      session.observed = {}
       local jobs = session.jobs
       session.jobs = {}
       for _, job in pairs(jobs) do stop_job(job) end

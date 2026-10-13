@@ -306,5 +306,33 @@ if vim.fn.executable("lsof") == 1 or vim.fn.executable("ss") == 1 then
   server:close()
   assert(finished and not scan_error and owned, scan_error or "Local listener ownership was not discovered")
 end
+-- Existing listeners are detected without starting or adopting an SSH job.
+local live = assert(vim.uv.new_tcp())
+assert(live:bind("127.0.0.1", 0))
+assert(live:listen(16, function()
+  local client = assert(vim.uv.new_tcp())
+  live:accept(client)
+  client:close()
+end))
+local live_port = live:getsockname().port
+ito.open("existing-forward")
+local existing = vim.api.nvim_get_current_buf()
+vim.api.nvim_buf_set_lines(existing, 0, -1, false, { live_port .. " -> 80" })
+local jobs_before = #starts
+ito.dashboard()
+local live_dashboard = vim.api.nvim_get_current_buf()
+local function live_text()
+  return table.concat(vim.api.nvim_buf_get_lines(live_dashboard, 0, -1, false), "\n")
+end
+assert(vim.wait(3000, function()
+  return live_text():find(live_port .. " -> 80  [listening (external)]", 1, true)
+end, 10), live_text())
+assert(#starts == jobs_before)
+live:close()
+buffer_key(live_dashboard, "r")
+assert(vim.wait(3000, function()
+  return live_text():find(live_port .. " -> 80  [not applied]", 1, true)
+end, 10), live_text())
+vim.api.nvim_buf_delete(existing, { force = true })
 print("ito checks passed")
 vim.fn.delete(data_dir, "rf")

@@ -50,6 +50,12 @@ one floating window. Your underlying editing window stays untouched.
 Saving also persists your hosts and port pairs in `stdpath("data")/ito/forwards.json`.
 They return next time you open Ito; save a host's buffer to start its forwards.
 
+Opening Ito or pressing `r` in the dashboard (`gr` in a host buffer) checks the
+configured local endpoints. `listening (external)` means a TCP listener is active
+outside Ito's tracked SSH jobs; Ito cannot verify that listener's remote destination
+or stop it with `s`. `running` identifies an SSH job managed by this Neovim session,
+and `not applied` means no listener was reached or an edited mapping needs saving.
+
 `8080 -> 3000` forwards your `localhost:8080` to `localhost:3000` on the SSH
 machine. You can also open a host directly with `:Ito user@host`.
 
